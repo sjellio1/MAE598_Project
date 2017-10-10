@@ -197,13 +197,12 @@ def animate_itr(i, *args):
     for lnum, line in enumerate(lines_itr):
         line.set_data(xlist[lnum], ylist[lnum])  # set data for each line separately.
 
-    if len(reward_itr) % obt_itr == 0:
-        xlist = np.asarray(state_history)[:, 0]
-        ylist = np.asarray(state_history)[:, 1]
-        lines_obt.set_data(xlist, ylist)
-        lines_str.set_data(xlist[0], ylist[0])
-        tau = 0.0167
-        time_text_obt.set_text('physical time = %6.2fs' % (len(xlist)*tau))
+    xlist = np.asarray(state_history)[:, 0]
+    ylist = np.asarray(state_history)[:, 1]
+    lines_obt.set_data(xlist, ylist)
+    lines_str.set_data(xlist[0], ylist[0])
+    tau = 0.0167
+    time_text_obt.set_text('physical time = %6.2fs' % (len(xlist)*tau))
 
     return (lines_itr,) + (lines_obt,) + (lines_str,) + (time_text_obt,)
 
@@ -216,7 +215,7 @@ def get_fig(max_epoch):
     # able to display multiple lines if needed
     global lines_obt, lines_itr, lines_str, time_text_obt
     lines_itr = []
-    lobj = ax_itr.plot([], [], lw=1, color="blue")[0]
+    lobj = ax_itr.plot([], [], linestyle='none', color="blue", marker='o')[0]
     lines_itr.append(lobj)
     lines_obt = []
     lines_str = []
