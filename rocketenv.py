@@ -18,10 +18,10 @@ FRAME_TIME = 0.0167  # 60 fps
 
 GRAVITY_ACCEL = 0.12
 BOOST_ACCEL = 0.18
-ROTATION_ACCEL = 20
+ROTATION_ACCEL = 20/180.
 
-W1 = 1.0  # X error reward weight
-W2 = 0.001  # Y error reward weight
+W1 = 100.0  # X error reward weight
+W2 = 0.0  # Y error reward weight
 W3 = 0.0  # Theta error reward weight
 W4 = 0.0  # Ydot error reward weight
 
@@ -46,11 +46,8 @@ class RocketEnv(gym.Env):
         random.seed(seed)
         return [seed]
 
-    def _step(self, inp):
-
-        action = inp[0]
-        num_steps = inp[1]
-
+    def _step(self, input):
+        action, num_steps = input
         # action = 0: no moves
         # action = 1: left turn
         # action = 2: right turn
@@ -67,8 +64,8 @@ class RocketEnv(gym.Env):
 
         if action == 3 or action == 4 or action == 5:
             self.isBoosting = True
-            y_dot -= BOOST_ACCEL * FRAME_TIME * math.cos(a * 3.14159265 / 180)
-            x_dot -= BOOST_ACCEL * FRAME_TIME * -math.sin(a * 3.14159265 / 180)
+            y_dot -= BOOST_ACCEL * FRAME_TIME * math.cos(a)
+            x_dot -= BOOST_ACCEL * FRAME_TIME * -math.sin(a)
         else:
             self.isBoosting = False
 
@@ -83,41 +80,50 @@ class RocketEnv(gym.Env):
         a += a_dot * FRAME_TIME
 
         #  Stay in bounds
-        # if x < 0:  # Left
-        #     done = True
-        # elif x > 1.0:  # Right
-        #     done = True
-        # elif y < 0:  # Top
-        #     done = True
-        # if y > 1.0 - PLATFORM_HEIGHT:
-        #     done = True
-        # else:
-        #     done = False
-
-        if num_steps > 500:
+        if x < 0:  # Left
+            done = True
+        elif x > 1.0:  # Right
+            done = True
+        elif y < 0:  # Top
             done = True
         elif y > 1.0 - PLATFORM_HEIGHT:
+            done = True
+        elif num_steps > 10000:
             done = True
         else:
             done = False
 
+        # if num_steps > 1000:
+        #     done = True
+        # elif y > 1.0 - PLATFORM_HEIGHT:
+        #     done = True
+        # else:
+        #     done = False
+
         self.state = (x, y, a, x_dot, y_dot, a_dot)
 
-        x_error = (x - 0.5)**8
-        y_error = (y - 1.0 + PLATFORM_HEIGHT)**2
-        a_error = (a - 0)**2
-        ydot_error = (y_dot - 0)**2
+        # x_reward = x_dot
+        x_reward = -(x - 0.5)*x_dot
+                   # - 10*(x - 0.5)**2 - 10*min(x-0.1, 0)**2 - 10*(max(0, x-0.9))**2
+        # x_penal = 10*min(x-0.1, 0)**2 + 10*(max(0, x-0.9))**2
+        y_reward = -((y - 1.0 + PLATFORM_HEIGHT)**2 + (x - 0.5)**2 + 1000*min(x-0.375, 0)**2 + 1000*(max(0, x-0.625))**2) * done
+        # y_penal = 10*min(y-0.1,0)**2
+        a_reward = -(a - 0)**2
+        # ydot_error = (y_dot - 0)**2
 
-        reward = -(W1*x_error + W2*y_error + W3*a_error + W4*ydot_error)
+        # reward = -(W1*x_error + W2*y_error + W3*a_error + W4*ydot_error + x_penal + y_penal)
+        reward = x_reward + y_reward + a_reward
+        # reward = x_reward
 
         return np.array(self.state), reward, done, {}
 
     def _reset(self):
 
-        x = random.uniform(0, 1)
-        # x = 0.1
-        y = 0.2
-        a = random.randrange(start=-30, stop=30, step=1)
+        # x = random.uniform(0, 1)
+        x = 0.1
+        y = 0.3
+        # a = random.uniform(-1, 1)*0.16
+        a = 0
         x_dot = 0.0
         y_dot = 0.0
         a_dot = 0.0
@@ -174,7 +180,7 @@ class RocketEnv(gym.Env):
         rocketx = (states[0]*screen_width) + rocket_width / 2.0  # MIDDLE OF CART
         rockety = (1.0 - states[1])*screen_height + rocket_height / 2.0  # MIDDLE OF CART
         self.rockettrans.set_translation(rocketx, rockety)
-        self.rockettrans.set_rotation(-states[2] * math.pi / 180)
+        self.rockettrans.set_rotation(-states[2] * math.pi)
 
         return self.viewer.render(return_rgb_array=mode == 'rgb_array')
 
@@ -234,7 +240,7 @@ class RocketEnv(gym.Env):
             rocketx = (x*screen_width) + rocket_width / 2.0  # MIDDLE OF CART
             rockety = (1.0 - y)*screen_height + rocket_height / 2.0  # MIDDLE OF CART
             self.rockettrans.set_translation(rocketx, rockety)
-            self.rockettrans.set_rotation(-a * math.pi / 180)
+            self.rockettrans.set_rotation(-a * math.pi)
 
             y_dot_last = y_dot
 

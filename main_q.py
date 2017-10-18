@@ -1,3 +1,5 @@
+### Test Q learning and AC
+
 from pylab import *
 import math
 import matplotlib.pyplot as plt
@@ -31,31 +33,36 @@ class Agent(object):
         self.params = self.__dict__.copy()
 
         # inputs to the controller
-        self.input_pl = tf.placeholder(tf.float32, [None, input_size])
+        self.state_pl = tf.placeholder(tf.float32, [None, input_size])
         self.action_pl = tf.placeholder(tf.int32, [None])
         self.reward_pl = tf.placeholder(tf.float32, [None])
+        self.Q_next = tf.placeholder(tf.float32, [None, input_size])
 
         # Here we use a single layered neural network as controller, which proved to be sufficient enough.
         # More complicated ones can be plugged in as well.
-        # hidden_layer = layers.fully_connected(self.input_pl,
+        # hidden_layer = layers.fully_connected(self.state_pl,
         #                                      hidden_size,
         #                                      biases_initializer=None,
         #                                      activation_fn=tf.nn.relu)
-        # hidden_layer = layers.fully_connected(hidden_layer,
-        #                                       hidden_size,
-        #                                       biases_initializer=None,
-        #                                       activation_fn=tf.nn.relu)
-        self.output = layers.fully_connected(self.input_pl,
+        hidden_layer = layers.fully_connected(self.state_pl,
+                                              hidden_size,
+                                              biases_initializer=None,
+                                              activation_fn=tf.nn.relu)
+        self.Q = layers.fully_connected(hidden_layer,
                                              action_size,
                                              biases_initializer=None,
-                                             activation_fn=tf.nn.softmax)
+                                             activation_fn=tf.nn.relu)
+        self.output = tf.nn.softmax(self.Q)
+
+        # update Q values
+        self.y = self.reward_pl + tf.reduce_max(self.Q_next)
 
         # responsible output
         self.one_hot = tf.one_hot(self.action_pl, action_size)
-        self.responsible_output = tf.reduce_sum(self.output * self.one_hot, axis=1)
+        self.actual_Q = tf.reduce_sum(self.Q * self.one_hot, axis=1)
 
-        # loss value of the network
-        self.loss = -tf.reduce_mean(tf.log(self.responsible_output) * self.reward_pl)
+        # Q learning
+        self.loss = (self.y-self.actual_Q)**2
 
         # get all network variables
         variables = tf.trainable_variables()
@@ -139,17 +146,13 @@ def one_trial(agent, sess, grad_buffer, reward_itr, i, render=False):
 
     while True:
 
-        feed_dict = {agent.input_pl: [s]}
+        feed_dict = {agent.state_pl: [s]}
         # update the controller deterministically
         greedy = False
-
-        if render and i % 50 == 0:
-            greedy = True
-
         # get the controller output under a given state
         action = agent.next_action(sess, feed_dict, greedy=greedy)
         # get the next states after taking an action
-        snext, r, done, _ = agent.env.step([action, len(state_history)])
+        s_next, r, done, _ = agent.env.step([action, len(state_history)])
 
         current_reward += r
         # current_reward = r
@@ -158,7 +161,22 @@ def one_trial(agent, sess, grad_buffer, reward_itr, i, render=False):
         reward_history.append(r)
         action_history.append(action)
 
-        s = snext
+        # best Q at s_next
+        Q_next = sess.run(agent.Q, {agent.state_pl: [s_next]}) * (1. - done)
+
+        # update network gradients at every time step
+        feed_dict = {
+            agent.reward_pl: [r],
+            agent.action_pl: [action],
+            agent.state_pl: [s],
+            agent.Q_next: Q_next
+        }
+        g = sess.run(agent.gradients, feed_dict=feed_dict)
+        for idx, grad in enumerate(g):
+            grad_buffer[idx] += grad
+
+        # update state
+        s = s_next
 
         if done:
 
@@ -167,22 +185,6 @@ def one_trial(agent, sess, grad_buffer, reward_itr, i, render=False):
 
             # record how long it has been balancing when the simulation is done
             reward_itr += [current_reward]
-
-            # get the "long term" rewards by taking decay parameter gamma into consideration
-            rewards = discounted_reward(reward_history, agent.gamma)
-
-            # normalizing the reward makes training faster
-            # rewards = (rewards - np.mean(rewards)) / (np.std(rewards) +0.00000000001)
-
-            # compute network gradients
-            feed_dict = {
-                agent.reward_pl: rewards,
-                agent.action_pl: action_history,
-                agent.input_pl: np.array(state_history)
-            }
-            episode_gradients = sess.run(agent.gradients, feed_dict=feed_dict)
-            for idx, grad in enumerate(episode_gradients):
-                grad_buffer[idx] += grad
 
             # apply gradients to the network variables
             feed_dict = dict(zip(agent.variable_pls, grad_buffer))
@@ -234,7 +236,7 @@ def get_fig(max_epoch):
     lines_str = []
 
     ax_itr.set_xlim([0, max_epoch])
-    ax_itr.set_ylim([-50, 50]) # ([0, max_reward])
+    ax_itr.set_ylim([-300, 300]) # ([0, max_reward])
     ax_itr.grid(False)
     ax_itr.set_xlabel('training epoch')
     ax_itr.set_ylabel('reward')
@@ -252,7 +254,7 @@ def get_fig(max_epoch):
 
 
 def main():
-    obt_itr = 10
+    obt_itr = 1
     max_epoch = 10000
     # whether to show the pole balancing animation
     render = True
@@ -260,7 +262,7 @@ def main():
 
     # set up figure for animation
     fig, ax_itr, ax_obt, time_text_obt = get_fig(max_epoch)
-    agent = Agent(hidden_size=12, lr=0.1, gamma=1.0, dir=dir)
+    agent = Agent(hidden_size=12, lr=0.0001, gamma=0.95, dir=dir)
     agent.show_parameters()
 
     # tensorflow initialization for neural network controller

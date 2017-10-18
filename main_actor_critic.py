@@ -50,6 +50,12 @@ class Agent(object):
                                              biases_initializer=None,
                                              activation_fn=tf.nn.softmax)
 
+        # Value function
+        self.V = layers.fully_connected(self.input_pl,
+                                        action_size,
+                                        biases_initializer=None,
+                                        activation_fn=tf.nn.softmax)
+
         # responsible output
         self.one_hot = tf.one_hot(self.action_pl, action_size)
         self.responsible_output = tf.reduce_sum(self.output * self.one_hot, axis=1)
@@ -115,7 +121,7 @@ def discounted_reward(rewards, gamma):
     return ans
 
 
-def one_trial(agent, sess, grad_buffer, reward_itr, i, render=False):
+def one_trial(agent, sess, actor_grad_buffer, critic_grad_buffer, reward_itr, i, render=False):
     '''
     this function does follow things before a trial is done:
     1. get a sequence of actions based on the current state and a given control policy
@@ -130,11 +136,15 @@ def one_trial(agent, sess, grad_buffer, reward_itr, i, render=False):
 
     # reset the environment
     s = agent.env.reset()
-    for idx in range(len(grad_buffer)):
-        grad_buffer[idx] *= 0
+    for idx in range(len(actor_grad_buffer)):
+        actor_grad_buffer[idx] *= 0
+    for idx in range(len(critic_grad_buffer)):
+        critic_grad_buffer[idx] *= 0
+
     state_history = []
     reward_history = []
     action_history = []
+    V_history = []
     current_reward = 0
 
     while True:
@@ -158,6 +168,10 @@ def one_trial(agent, sess, grad_buffer, reward_itr, i, render=False):
         reward_history.append(r)
         action_history.append(action)
 
+        # get value for current state
+        V = agent.V(sess, {agent.input_pl: [s]})
+        V_history.append(V)
+
         s = snext
 
         if done:
@@ -174,33 +188,48 @@ def one_trial(agent, sess, grad_buffer, reward_itr, i, render=False):
             # normalizing the reward makes training faster
             # rewards = (rewards - np.mean(rewards)) / (np.std(rewards) +0.00000000001)
 
-            # compute network gradients
+            # compute actor network gradients
             feed_dict = {
                 agent.reward_pl: rewards,
                 agent.action_pl: action_history,
                 agent.input_pl: np.array(state_history)
             }
-            episode_gradients = sess.run(agent.gradients, feed_dict=feed_dict)
-            for idx, grad in enumerate(episode_gradients):
-                grad_buffer[idx] += grad
+            actor_gradients = sess.run(agent.actor_gradients, feed_dict=feed_dict)
+
+            for idx, grad in enumerate(actor_gradients):
+                actor_grad_buffer[idx] += grad
 
             # apply gradients to the network variables
-            feed_dict = dict(zip(agent.variable_pls, grad_buffer))
-            sess.run(agent.update, feed_dict=feed_dict)
+            feed_dict = dict(zip(agent.actor_variable_pls, actor_grad_buffer))
+            sess.run(agent.update_actor, feed_dict=feed_dict)
+
+            # compute critic network gradients
+            feed_dict = {
+                agent.reward_pl: rewards,
+                agent.v_pl: V_history,
+            }
+            critic_gradients = sess.run(agent.critic_gradients, feed_dict=feed_dict)
+            for idx, grad in enumerate(critic_gradients):
+                critic_grad_buffer[idx] += grad
+
+            # apply gradients to the network variables
+            feed_dict = dict(zip(agent.critic_variable_pls, critic_grad_buffer))
+            sess.run(agent.update_critic, feed_dict=feed_dict)
 
             # reset the buffer to zero
-            for idx in range(len(grad_buffer)):
-                grad_buffer[idx] *= 0
-            break
+            for idx in range(len(actor_grad_buffer)):
+                actor_grad_buffer[idx] *= 0
+            for idx in range(len(critic_grad_buffer)):
+                critic_grad_buffer[idx] *= 0
 
     return state_history
 
 
 def animate_itr(i, *args):
     #  animation of each training epoch
-    agent, sess, grad_buffer, reward_itr, sess, grad_buffer, agent, obt_itr, render = args
+    agent, sess, actor_grad_buffer, critic_grad_buffer, reward_itr, sess, grad_buffer, agent, obt_itr, render = args
     #
-    state_history = one_trial(agent, sess, grad_buffer, reward_itr, i, render)
+    state_history = one_trial(agent, sess, actor_grad_buffer, critic_grad_buffer, reward_itr, i, render)
     xlist = [range(len(reward_itr))]
     ylist = [reward_itr]
     # if len(ylist) > 0:
@@ -260,7 +289,7 @@ def main():
 
     # set up figure for animation
     fig, ax_itr, ax_obt, time_text_obt = get_fig(max_epoch)
-    agent = Agent(hidden_size=12, lr=0.1, gamma=1.0, dir=dir)
+    agent = Agent(hidden_size=12, lr=0.01, gamma=1.0, dir=dir)
     agent.show_parameters()
 
     # tensorflow initialization for neural network controller
@@ -273,7 +302,7 @@ def main():
 
     global reward_itr
     reward_itr = []
-    args = [agent, sess, grad_buffer, reward_itr, sess, grad_buffer, agent, obt_itr, render]
+    args = [agent, sess, actor_grad_buffer, critic_grad_buffer, reward_itr, sess, grad_buffer, agent, obt_itr, render]
     # run the optimization and output animation
     ani = animation.FuncAnimation(fig, animate_itr, fargs=args)
     plt.show()
