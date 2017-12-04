@@ -1,5 +1,4 @@
 from pylab import *
-import math
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import tensorflow as tf
@@ -37,15 +36,15 @@ class Agent(object):
 
         # Here we use a single layered neural network as controller, which proved to be sufficient enough.
         # More complicated ones can be plugged in as well.
-        # hidden_layer = layers.fully_connected(self.input_pl,
-        #                                      hidden_size,
-        #                                      biases_initializer=None,
-        #                                      activation_fn=tf.nn.relu)
-        # hidden_layer = layers.fully_connected(hidden_layer,
-        #                                       hidden_size,
-        #                                       biases_initializer=None,
-        #                                       activation_fn=tf.nn.relu)
-        self.output = layers.fully_connected(self.input_pl,
+        hidden_layer = layers.fully_connected(self.input_pl,
+                                             hidden_size,
+                                             biases_initializer=None,
+                                             activation_fn=tf.nn.relu)
+        hidden_layer = layers.fully_connected(hidden_layer,
+                                              hidden_size,
+                                             biases_initializer=None,
+                                             activation_fn=tf.nn.relu)
+        self.output = layers.fully_connected(hidden_layer,
                                              action_size,
                                              biases_initializer=None,
                                              activation_fn=tf.nn.softmax)
@@ -101,13 +100,9 @@ def discounted_reward(rewards, gamma):
     """Compute the discounted reward."""
     ans = np.zeros_like(rewards)
     running_sum = 0
-    weight = np.array(range(len(rewards)))
-    for i in weight:
-        weight[i] = weight[i]**2
-    reward_weighted = rewards * np.array(weight)
-    # compute the result backward
+
     for i in reversed(range(len(rewards))):
-        running_sum = running_sum * gamma + reward_weighted[i]
+        running_sum = running_sum * gamma + rewards[i]
         ans[i] = running_sum
     return ans
 
@@ -153,47 +148,74 @@ def one_trial(agent, sess, grad_buffer, reward_itr, i, render=False):
 
         if done:
 
-            if render and i % 50 == 0:
+            # record how long it has been balancing when the simulation is done
+            # reward_itr += [current_reward]
+            reward_itr += [reward_history[-1]]
+
+            if render and i % 200 == 0:
                 agent.env.render_fullcycle(state_history, action_history)
 
-            # record how long it has been balancing when the simulation is done
-            reward_itr += [current_reward]
-
-            # get the "long term" rewards by taking decay parameter gamma into consideration
-            rewards = discounted_reward(reward_history, agent.gamma)
-
-            # normalizing the reward makes training faster
-            rewards = (rewards - np.mean(rewards)) / np.std(rewards)
-
-            # compute network gradients
-            feed_dict = {
-                agent.reward_pl: rewards,
-                agent.action_pl: action_history,
-                agent.input_pl: np.array(state_history)
-            }
-            episode_gradients = sess.run(agent.gradients, feed_dict=feed_dict)
-            for idx, grad in enumerate(episode_gradients):
-                grad_buffer[idx] += grad
-
-            # apply gradients to the network variables
-            feed_dict = dict(zip(agent.variable_pls, grad_buffer))
-            sess.run(agent.update, feed_dict=feed_dict)
-
-            # reset the buffer to zero
-            for idx in range(len(grad_buffer)):
-                grad_buffer[idx] *= 0
+            reward_avg = update_network(agent, sess, grad_buffer, state_history, action_history, reward_history)
             break
 
-    return state_history
+    return state_history, reward_itr
+
+
+def update_network(agent, sess, grad_buffer, state_history, action_history, reward_history):
+
+    # get the "long term" rewards by taking decay parameter gamma into consideration
+    # reward_history = [reward_history[-1] for i in range(len(reward_history))]
+    rewards = discounted_reward(reward_history, agent.gamma)
+
+    reward_avg = np.mean(reward_history)
+
+    # normalizing the reward makes training faster
+    # rewards = (rewards - np.mean(rewards)) / np.std(rewards)
+
+    # compute network gradients
+    feed_dict = {
+        agent.reward_pl: rewards,
+        agent.action_pl: action_history,
+        agent.input_pl: np.array(state_history)
+    }
+    episode_gradients = sess.run(agent.gradients, feed_dict=feed_dict)
+    for idx, grad in enumerate(episode_gradients):
+        grad_buffer[idx] += grad
+
+    # apply gradients to the network variables
+    feed_dict = dict(zip(agent.variable_pls, grad_buffer))
+    sess.run(agent.update, feed_dict=feed_dict)
+
+    # reset the buffer to zero
+    for idx in range(len(grad_buffer)):
+        grad_buffer[idx] *= 0
+
+    return
 
 
 def animate_itr(i, *args):
+    global itr, ax_itr
+
     #  animation of each training epoch
-    agent, sess, grad_buffer, reward_itr, sess, grad_buffer, agent, obt_itr, render = args
+    agent, sess, grad_buffer, reward_itr, sess, grad_buffer, agent, ax_itr, obt_itr, render, out_file = args
     #
-    state_history = one_trial(agent, sess, grad_buffer, reward_itr, i, render)
+
+    itr += 1
+
+    # if itr < 200:
+    #     state_history, reward_itr = one_manual_trial(agent, sess, grad_buffer, reward_itr, i, render)
+    # else:
+    state_history, reward_itr = one_trial(agent, sess, grad_buffer, reward_itr, i, render)
+
+    if itr == 10:
+        tf.summary.FileWriter("logs", sess.graph).close()
+
     xlist = [range(len(reward_itr))]
     ylist = [reward_itr]
+
+    if itr % 100 == 0:
+        ax_itr.set_xlim([0, itr+100])
+
     for lnum, line in enumerate(lines_itr):
         line.set_data(xlist[lnum], ylist[lnum])  # set data for each line separately.
 
@@ -201,53 +223,63 @@ def animate_itr(i, *args):
     ylist = np.asarray(state_history)[:, 1]
     lines_obt.set_data(xlist, ylist)
     lines_str.set_data(xlist[0], ylist[0])
+
+    # Write full trial to file
+    # for x,y in zip(xlist, ylist):
+    #     out_file.write("%f\t%f\t" % (x, y))
+    # out_file.write("\n")
+    # Write ending location to file
+    # out_file.write("%f\t%f\n" % (xlist[-1], ylist[-1]))
+
     tau = 0.0167
-    time_text_obt.set_text('physical time = %6.2fs' % (len(xlist)*tau))
+    time_text_obt.set_text('reward avg = %6.6f' % reward_itr[-1])
 
     return (lines_itr,) + (lines_obt,) + (lines_str,) + (time_text_obt,)
 
 
 def get_fig(max_epoch):
+    global lines_obt, lines_itr, lines_str, time_text_obt
     fig = plt.figure()
     ax_itr = axes([0.1, 0.1, 0.8, 0.8])
-    ax_obt = axes([0.5, 0.2, .3, .3])
+    ax_obt = axes([0.5, 0.5, .3, .3])
 
     # able to display multiple lines if needed
-    global lines_obt, lines_itr, lines_str, time_text_obt
     lines_itr = []
     lobj = ax_itr.plot([], [], linestyle='none', color="blue", marker='o')[0]
     lines_itr.append(lobj)
     lines_obt = []
     lines_str = []
 
-    ax_itr.set_xlim([0, max_epoch])
-    ax_itr.set_ylim([0, -200]) # ([0, max_reward])
+    ax_itr.set_xlim([0, 100])
+    ax_itr.set_ylim([1, -3]) # ([0, max_reward])
     ax_itr.grid(False)
     ax_itr.set_xlabel('training epoch')
     ax_itr.set_ylabel('reward')
 
     time_text_obt = []
-    ax_obt.set_xlim([0, 1])
-    ax_obt.set_ylim([1, 0])
+    ax_obt.set_xlim([-1, 1])
+    ax_obt.set_ylim([0, -1])
     ax_obt.set_xlabel('x')
     ax_obt.set_ylabel('y')
     lines_obt = ax_obt.plot([], [], lw=1, color="red")[0]
     lines_str = ax_obt.plot([], [], linestyle='none', marker='o', color='g')[0]
-    #plt.legend([lines_str], ['Start'])
     time_text_obt = ax_obt.text(0.05, 0.9, '', fontsize=13, transform=ax_obt.transAxes)
     return fig, ax_itr, ax_obt, time_text_obt
 
 
 def main():
     obt_itr = 10
-    max_epoch = 3000
+    max_epoch = 10000
     # whether to show the pole balancing animation
-    render = True
+    render = False
     dir = 'tmp/trial/'
+
+    export = True
+    out_file = open("out.txt", "w")
 
     # set up figure for animation
     fig, ax_itr, ax_obt, time_text_obt = get_fig(max_epoch)
-    agent = Agent(hidden_size=24, lr=0.2, gamma=1.00, dir=dir)
+    agent = Agent(hidden_size=12, lr=0.01, gamma=1, dir=dir)
     agent.show_parameters()
 
     # tensorflow initialization for neural network controller
@@ -258,12 +290,20 @@ def main():
     grad_buffer = sess.run(tf.trainable_variables())
     tf.reset_default_graph()
 
-    global reward_itr
+    global reward_itr, itr
     reward_itr = []
-    args = [agent, sess, grad_buffer, reward_itr, sess, grad_buffer, agent, obt_itr, render]
+    itr = 1
+    args = [agent, sess, grad_buffer, reward_itr, sess, grad_buffer, agent, ax_itr, obt_itr, render, out_file]
     # run the optimization and output animation
-    ani = animation.FuncAnimation(fig, animate_itr, fargs=args)
+    ani = animation.FuncAnimation(fig, animate_itr, frames=max_epoch, repeat=False, fargs=args)
+
+
+    FFwriter = animation.FFMpegWriter(fps=30, extra_args=['-vcodec', 'libx264'])
     plt.show()
+
+    out_file.close()
+    plt.rcParams['animation.ffmpeg_path'] = 'C:\\ffmpeg\\bin\\ffmpeg.exe'
+    ani.save('animation.mp4',writer=FFwriter)
 
 if __name__ == "__main__":
    main()
